@@ -11,12 +11,16 @@
 #include <stdlib.h>
 #include <errno.h>
 
-// Locks for each condition variable
+// Locks for each global variable
+// We could just use one, but this makes it more clear what
+// we lock on, and has a very small effect on efficiency of
+// loading, but not much else.
 pthread_mutex_t boat_mutex;
 pthread_mutex_t children_start_mutex;
 pthread_mutex_t children_end_mutex;
 pthread_mutex_t adult_mutex;
 pthread_mutex_t done_mutex;
+pthread_mutex_t signal_mutex;
 // Condition variables
 pthread_cond_t boat;
 pthread_cond_t start;
@@ -32,18 +36,22 @@ int children_start=0;
 int children_end=0;
 int boat_pass=0;
 int done=0;
+int signaled_end=0;
 
 void* adult(void*);
 void* child(void*);
 void initSynch();
 void closeSynch();
-// local function just used to randomly shuffle creation order of atoms
+// local function just used to randomly shuffle creation order of people
 void shuffle(int*, int);
 // local function used to check that semaphores are available
 void check_sem(sem_t**, char*);
 
 
-
+// Main initializes threads based on command line arguments,
+// and randomizes creation for good testing. It also uses
+// the two semaphores to help threads synchronize starting and
+// to kill all the threads once everyone got to Molokai.
 int main(int argc, char* argv[]) {
   if (argc < 3) {
     printf("Need to put in adult and children numbers\n");
@@ -75,6 +83,10 @@ int main(int argc, char* argv[]) {
   pthread_t people[total];
   long adult_counter=0;
   long child_counter=0;
+
+  // Note: we don't use NULL as the 4th item so that printing
+  // is more debuggable so we can see which children and adults
+  // are going from island to island.
   for (i=0; i<total; i++) {
     if (order[i]==1) {
       adult_counter++;
@@ -88,18 +100,17 @@ int main(int argc, char* argv[]) {
   }
   //--------------End create threads -----------------
 
-  // Wait for all the threads to be created, then make the
-  // boat show up
+  // Wait for all the threads to be created
   for (i=0; i<total; i++) {
     sem_wait(threads_initialized);
   }
-
   // Signal a child to start
   pthread_cond_signal(&start);
 
+
   // Wait for everyone to get across, then exit
   sem_wait(threads_at_end);
-
+  sem_wait(threads_at_end);
   exit(0);
 
 }
@@ -108,20 +119,18 @@ int main(int argc, char* argv[]) {
 // ---------------------------Adult and Child threads---------------------------
 void* adult(void* args) {
   long my_id = (long)args;
-  // tell others you're ready
+
+  // Tell others you're ready and get in the adult queue
+  pthread_mutex_lock(&adult_mutex);
+  adults_start++;
   printf("Adult %ld arrived on Oahu.\n", my_id);
   fflush(stdout);
   sem_post(threads_initialized);
-
-  // Get in the adult queue
-  pthread_mutex_lock(&adult_mutex);
-  adults_start++;
   pthread_cond_wait(&adult_cond, &adult_mutex);
   pthread_mutex_unlock(&adult_mutex);
 
-  // once out of the adult queue, there must be 1 or 0 children
+  // once out of the adult queue, there must be 1 child left
   // on the start island, so row over, signal a child to row back
-  // unless there is no one left on the start island
 
   printf("Adult %ld getting in boat on Oahu.\n", my_id);
   fflush(stdout);
@@ -148,15 +157,17 @@ void* child(void* args) {
   long my_id = (long)args;
 
   pthread_mutex_lock(&children_start_mutex);
+  // Up the number of children at the start and tell main you're ready.
   children_start++;
-  // initialize where you are, and tell main you're ready
-  printf("Child %ld arrive on start (Oahu)\n", my_id);
+  printf("Child %ld arrive on Oahu.\n", my_id);
   fflush(stdout);
   sem_post(threads_initialized);
-  // get in the starting queue, but let other children start
+  // get in the starting queue and let other children start
   pthread_cond_wait(&start, &children_start_mutex);
   pthread_mutex_unlock(&children_start_mutex);
 
+  // Children always want to play on boats, this fact is as true as
+  // 1==1, so that's when children will try to get on boats.
   while(1==1) {
     // If there are exactly 2 children and 0 adults, we'll be done after
     // This boat trip, so save that.
@@ -170,14 +181,14 @@ void* child(void* args) {
     pthread_mutex_unlock(&adult_mutex);
     pthread_mutex_unlock(&children_start_mutex);
 
-
-    pthread_mutex_lock(&boat_mutex);
     // Once child has been signaled that there's a spot to go to
     // the child should get on the boat, go in pairs
+    pthread_mutex_lock(&boat_mutex);
     printf("Child %ld getting in boat on Oahu.\n", my_id);
     fflush(stdout);
     boat_pass++;
-    //Signal another child to get in the boat.
+    // Signal another child to get in the boat if there isn't already
+    // another child on the boat.
     if (boat_pass<2) {
       pthread_cond_signal(&start);
     }
@@ -197,7 +208,8 @@ void* child(void* args) {
 
 
     // Leave the boat and get on the end island, but wait for other child
-    // to row to end
+    // to row to end, as we don't want one child getting out before
+    // the other rows... it's a long swim from Oahu to Molokai.
     if (boat_pass>1) {
       pthread_cond_wait(&boat, &boat_mutex);
     }
@@ -217,20 +229,45 @@ void* child(void* args) {
     pthread_mutex_lock(&done_mutex);
     if (done == 1) {
       sem_post(threads_at_end);
-      pthread_cond_wait(&boat, &done_mutex);
+      pthread_mutex_unlock(&children_end_mutex);
+      pthread_mutex_unlock(&done_mutex);
+      pthread_exit(NULL);
     }
 
-    // signal the end queue to send one back, then wait in the queue
-    pthread_cond_signal(&end);
     pthread_mutex_unlock(&done_mutex);
-
-    pthread_cond_wait(&end, &children_end_mutex);
     // release the lock
+
+
+    //pthread_cond_signal(&end);
+    //pthread_cond_wait(&end, &children_end_mutex);
+
+    // signal the end queue to send EXACTLY one back, then wait in the queue
+    pthread_mutex_lock(&signal_mutex);
+    if (signaled_end==0) {
+      signaled_end++;
+    } else {
+      signaled_end=0;
+      pthread_cond_signal(&end);
+    }
+    pthread_mutex_unlock(&signal_mutex);
+    pthread_cond_wait(&end, &children_end_mutex);
+
+    // Release children_end for editing here so that we don't have
+    // people trying to leave without others getting off the boat
     pthread_mutex_unlock(&children_end_mutex);
 
+    printf("Child %ld made it to the lock.\n",my_id);
+    fflush(stdout);
 
+    //before going, double check that we aren't already done.
+    pthread_mutex_lock(&done_mutex);
+    if (done == 1) {
+      pthread_mutex_unlock(&done_mutex);
+      pthread_exit(NULL);
+    }
+    pthread_mutex_unlock(&done_mutex);
 
-    // go back to first island
+    // go back to first island if you're out of the end island wait queue
     // ...................
     pthread_mutex_lock(&boat_mutex);
     // Once child has been signaled that there's a spot to go to
@@ -261,12 +298,14 @@ void* child(void* args) {
     // that there is a boat here to get into, if no children besides
     // self, then signal an adult to go.
     pthread_mutex_lock(&children_start_mutex);
+    pthread_mutex_lock(&adult_mutex);
     children_start++;
     if (children_start>1) {
       pthread_cond_signal(&start);
-    } else {
+    } else if (adults_start > 0) {
       pthread_cond_signal(&adult_cond);
     }
+    pthread_mutex_unlock(&adult_mutex);
     // Get in the start queue
     pthread_cond_wait(&start, &children_start_mutex);
     pthread_mutex_unlock(&children_start_mutex);
@@ -285,6 +324,7 @@ void initSynch() {
   pthread_mutex_init(&children_end_mutex, NULL);
   pthread_mutex_init(&adult_mutex, NULL);
   pthread_mutex_init(&done_mutex, NULL);
+  pthread_mutex_init(&signal_mutex, NULL);
   pthread_cond_init(&boat, NULL);
   pthread_cond_init(&start, NULL);
   pthread_cond_init(&end, NULL);
