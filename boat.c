@@ -196,11 +196,6 @@ void* child(void* args) {
     pthread_mutex_unlock(&children_start_mutex);
 
 
-
-    // get out of the boat
-    printf("Child %ld leaving boat on Molokai.\n", my_id);
-    fflush(stdout);
-
     // Leave the boat and get on the end island, but wait for other child
     // to row to end
     if (boat_pass>1) {
@@ -209,13 +204,16 @@ void* child(void* args) {
     boat_pass--;
     pthread_cond_signal(&boat);
     pthread_mutex_unlock(&boat_mutex);
+    // get out of the boat
+    printf("Child %ld leaving boat on Molokai.\n", my_id);
+    fflush(stdout);
+
 
     pthread_mutex_lock(&children_end_mutex);
     children_end++;
 
-
     // If we decided we're done, then tell main we're done, and
-    // let main run.
+    // let main run and exit the program.
     pthread_mutex_lock(&done_mutex);
     if (done == 1) {
       sem_post(threads_at_end);
@@ -229,8 +227,6 @@ void* child(void* args) {
     pthread_cond_wait(&end, &children_end_mutex);
     // release the lock
     pthread_mutex_unlock(&children_end_mutex);
-
-
 
 
 
@@ -300,30 +296,6 @@ void initSynch() {
 
   check_sem(&threads_initialized, "startsmphr");
   check_sem(&threads_at_end, "endsmphr");
-}
-
-void closeSynch() {
-  // Close the mutexes, condition variables and semaphores
-  // Close the threads and mutexes
-  /*
-  pthread_mutex_destroy(&boat_mutex);
-  pthread_mutex_destroy(&children_start_mutex);
-  pthread_mutex_destroy(&children_end_mutex);
-  pthread_mutex_destroy(&adult_mutex);
-  pthread_mutex_destroy(&done_mutex);
-  pthread_cond_destroy(&boat);
-  pthread_cond_destroy(&start);
-  pthread_cond_destroy(&end);
-  pthread_cond_destroy(&adult_cond);
-  */
-  // important to BOTH close the semaphore object AND unlink the semaphore file
-  // for each semaphore
-  sem_close(threads_initialized);
-  sem_unlink("startsmphr");
-  sem_close(threads_at_end);
-  sem_unlink("endsmphr");
-
-  pthread_exit (NULL);
 }
 
 void shuffle(int* intArray, int arrayLen) {

@@ -15,6 +15,9 @@ void delay(int);
 
 void check_sem(sem_t**, char*);
 
+// local function just used to randomly shuffle creation order of atoms
+void shuffle(int*, int);
+
 
 // decalre hydrogen, sulfur, and oxygen semaphores as a global variable so
 // they are shared and accessible from all threads
@@ -25,44 +28,49 @@ sem_t* oxy_used_sem;
 sem_t* wait_to_leave_sem;
 sem_t* sulfur_lock_sem;
 
-int main() {
+int main(int argc, char* argv[]) {
   openSems();
 
-  // create 6 threads, 4 running the Hydrogen function
-  // and 2 running the Sulfur function and
-  // 8 running the oxygen function
-  pthread_t oxy1, oxy2,oxy3, oxy4,oxy5, oxy6,oxy7, oxy8, hydro1, hydro2, hydro3, hydro4;
-  pthread_t sul1, sul2;
-  pthread_create(&hydro1, NULL, hydrogen, NULL);
-  pthread_create(&hydro2, NULL, hydrogen, NULL);
-  pthread_create(&oxy1, NULL, oxygen, NULL);
-  pthread_create(&oxy2, NULL, oxygen, NULL);
-  pthread_create(&hydro3, NULL, hydrogen, NULL);
-  pthread_create(&hydro4, NULL, hydrogen, NULL);
-  pthread_create(&sul1, NULL, sulfur, NULL);
-  pthread_create(&sul2, NULL, sulfur, NULL);
-  pthread_create(&oxy3, NULL, oxygen, NULL);
-  pthread_create(&oxy4, NULL, oxygen, NULL);
-  pthread_create(&oxy5, NULL, oxygen, NULL);
-  pthread_create(&oxy6, NULL, oxygen, NULL);
-  pthread_create(&oxy7, NULL, oxygen, NULL);
-  pthread_create(&oxy8, NULL, oxygen, NULL);
+  // set # to create of each atom (atoi converts a string to an int)
+  const int numhydros = atoi(argv[1]);
+  const int numsulfurs = atoi(argv[2]);
+  const int numoxys = atoi(argv[3]);
+  const int total = numoxys+numhydros+numsulfurs;
 
-  // this main program thread will wait until all 6 spawned threads exit before continuing
-  pthread_join(hydro1, NULL);
-  pthread_join(hydro2, NULL);
-  pthread_join(oxy1, NULL);
-  pthread_join(oxy2, NULL);
-  pthread_join(hydro3, NULL);
-  pthread_join(hydro4, NULL);
-  pthread_join(oxy3, NULL);
-  pthread_join(oxy4, NULL);
-  pthread_join(oxy5, NULL);
-  pthread_join(oxy6, NULL);
-  pthread_join(oxy7, NULL);
-  pthread_join(oxy8, NULL);
-  pthread_join(sul1, NULL);
-  pthread_join(sul2, NULL);
+  // seed the random number generator with the current time
+  srand(time(NULL));
+
+  // add desired number of each type of atom (represented as a simple int) to an array
+  // oxygen is represented as 1, hydrogen as 2, and sulfur as 3
+  int order[total];
+  int i;
+  for (i=0; i<numoxys; i++) {
+    order[i] = 1;
+  }
+  for (; i<numhydros+numoxys; i++) {
+    order[i] = 2;
+  }
+  for (; i<total; i++) {
+    order[i] = 3;
+  }
+
+  // order now has # of 1's, 2's, and 3's to reflect # of 3 types of atoms,
+  // so just need to shuffle to get random order
+  shuffle(order, total);
+
+  // now create threads in shuffled order
+  pthread_t atoms[total];
+  for (i=0; i<total; i++) {
+    if (order[i]==1) pthread_create(&atoms[i], NULL, oxygen, NULL);
+    else if (order[i]==2) pthread_create(&atoms[i], NULL, hydrogen, NULL);
+    else if (order[i]==3) pthread_create(&atoms[i], NULL, sulfur, NULL);
+    else printf("something went horribly wrong!!!\n");
+  }
+
+  // join all threads before letting main exit
+  for (i=0; i<total; i++) {
+    pthread_join(atoms[i], NULL);
+  }
 
   closeSems();
   return 0;
@@ -242,4 +250,14 @@ void delay( int limit )
         {
         }
     }
+}
+
+void shuffle(int* intArray, int arrayLen) {
+  int i=0;
+  for (i=0; i<arrayLen; i++) {
+    int r = rand()%arrayLen;
+    int temp = intArray[i];
+    intArray[i] = intArray[r];
+    intArray[r] = temp;
+  }
 }
