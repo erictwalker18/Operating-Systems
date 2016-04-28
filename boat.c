@@ -256,9 +256,6 @@ void* child(void* args) {
     // people trying to leave without others getting off the boat
     pthread_mutex_unlock(&children_end_mutex);
 
-    printf("Child %ld made it to the lock.\n",my_id);
-    fflush(stdout);
-
     //before going, double check that we aren't already done.
     pthread_mutex_lock(&done_mutex);
     if (done == 1) {
